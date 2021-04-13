@@ -9,9 +9,9 @@ import FileIO
 #import JLD
 
 ## encode non-HDF5 types in the key by adding type indicator---a poorman's solution
-HDF5.write(fd::HDF5File, s::AbstractString, b::Bool) = write(fd, string(s,":Bool"), Int8(b))
-HDF5.write(fd::HDF5File, s::AbstractString, sym::Symbol) = write(fd, string(s,":Symbol"), string(sym))
-HDF5.write(fd::HDF5File, s::AbstractString, ss::SubString) = write(fd, s, ascii(ss))
+# HDF5.write(fd::HDF5File, s::AbstractString, b::Bool) = write(fd, string(s,":Bool"), Int8(b))
+# HDF5.write(fd::HDF5File, s::AbstractString, sym::Symbol) = write(fd, string(s,":Symbol"), string(sym))
+# HDF5.write(fd::HDF5File, s::AbstractString, ss::SubString) = write(fd, s, ascii(ss))
 
 ## always save data in Float32
 ## the functiona arguments are the same as the output of feacalc

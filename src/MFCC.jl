@@ -9,13 +9,14 @@ export powspec, audspec, postaud, lifter
 export mfcc, deltas, warp, sdc, znorm, znorm!, stmvn
 export feasave, feaload, feasize
 export feacalc
+export Bark, Mel, HTKMel, FCMel
 
 using DSP
 using HDF5
-using WAV
 using SpecialFunctions ## erfinv
 using Statistics  
 
+include("filterbank.jl")
 include("rasta.jl")
 include("mfccs.jl")
 include("feacalc.jl")

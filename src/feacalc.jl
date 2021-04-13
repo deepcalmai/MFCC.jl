@@ -6,8 +6,38 @@
 nrow(x) = size(x,1)
 ncol(x) = size(x,2)
 
+abstract type ReadMethod end
+struct WavReadMethod <: ReadMethod end
+struct SoxReadMethod <: ReadMethod end
+struct SphereReadMethod <: ReadMethod end
+
+
 ## compute features according to standard settingsm directly from a wav file.
 ## this does channel at the time.
+
+# function feacalc(wavfile::AbstractString; kwargs...)
+#     feacalc(wavfile::AbstractString; method=WavReadMethod(), kwargs...)
+# end
+
+# function feacalc(wavfile::AbstractString; method::WavReadMethod, kwargs...)
+#     (x, sr) = wavread(wavfile)
+#     sr = Float64(sr)       # more reasonable sr
+#     feacalc(x; sr=sr, source=wavfile, kwargs...)
+# end
+
+# function feacalc(wavfile::AbstractString; method::SoxReadMethod, kwargs...)
+#     (x, sr) = soxread(wavfile)
+#     sr = Float64(sr)       # more reasonable sr
+#     feacalc(x; sr=sr, source=wavfile, kwargs...)
+# end
+
+# function feacalc(wavfile::AbstractString; method::SphereReadMethod, kwargs...)
+#     (x, sr) = sphread(wavfile)
+#     sr = Float64(sr)       # more reasonable sr
+#     feacalc(x; sr=sr, source=wavfile, kwargs...)
+# end
+
+
 function feacalc(wavfile::AbstractString; method=:wav, kwargs...)
     if method == :wav
         (x, sr) = wavread(wavfile)

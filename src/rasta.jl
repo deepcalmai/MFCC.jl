@@ -29,23 +29,12 @@ function powspec(x::Vector{T}, sr::Real=8000.0; wintime=0.025, steptime=0.01, di
 end
 
 # audspec tested against octave with simple vectors for all fbtypes
-function audspec(x::Matrix{T}, sr::Real=16000.0; nfilts=ceil(Int, hz2bark(sr/2)), fbtype=:bark,
+function audspec(x::Matrix{T}, sr::Real=16000.0; nfilts=ceil(Int, hz2bark(sr/2)), fbtype::FilterBank=Bark(),
                  minfreq=0., maxfreq=sr/2, sumpower=true, bwidth=1.0) where {T<:AbstractFloat}
     nfreqs, nframes = size(x)
     nfft = 2(nfreqs-1)
-    if fbtype == :bark
-        wts = fft2barkmx(nfft, nfilts, sr=sr, width=bwidth, minfreq=minfreq, maxfreq=maxfreq)
-    elseif fbtype == :mel
-        wts = fft2melmx(nfft, nfilts, sr=sr, width=bwidth, minfreq=minfreq, maxfreq=maxfreq)
-    elseif fbtype == :htkmel
-        wts = fft2melmx(nfft, nfilts, sr=sr, width=bwidth, minfreq=minfreq, maxfreq=maxfreq,
-                        htkmel=true, constamp=true)
-    elseif fbtype == :fcmel
-        wts = fft2melmx(nfft, nfilts, sr=sr, width=bwidth, minfreq=minfreq, maxfreq=maxfreq,
-                        htkmel=true, constamp=false)
-    else
-        error("Unknown filterbank type ", fbtype)
-    end
+    wts = fft2band(fbtype, nfft, nfilts, sr=sr, width=bwidth, minfreq=minfreq, maxfreq=maxfreq)
+    
     wts = wts[:, 1:nfreqs]
     if sumpower
         return wts * x
@@ -54,13 +43,13 @@ function audspec(x::Matrix{T}, sr::Real=16000.0; nfilts=ceil(Int, hz2bark(sr/2))
     end
 end
 
-function fft2barkmx(nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0., maxfreq=sr/2)
+function fft2band(fbtype::Bark, nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0., maxfreq=sr/2)
     hnfft = nfft >> 1
-    minbark = hz2bark(minfreq)
-    nyqbark = hz2bark(maxfreq) - minbark
+    minbark = hz2band(minfreq, fbtype)
+    nyqbark = hz2band(maxfreq, fbtype) - minbark
     wts=zeros(nfilts, nfft)
     stepbark = nyqbark/(nfilts-1)
-    binbarks = hz2bark.((0:hnfft) * sr / nfft)
+    binbarks = hz2band.((0:hnfft) * sr / nfft, fbtype)
     for i in 1:nfilts
         midbark = minbark + (i-1) * stepbark
         lof = (binbarks .- midbark) / width .- 0.5
@@ -71,19 +60,20 @@ function fft2barkmx(nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0., ma
     return wts
 end
 
-## Hynek's formula   
-hz2bark(f) = 6asinh(f / 600)
-bark2hz(bark) = 600 * sinh(bark / 6)
+scale_channel!(::FilterBank, wts::AbstractArray, nfilts::Int, binfreqs) = nothing
+## unclear what this does...
+## Slaney-style mel is scaled to be approx constant E per channel
+scale_channel!(::HTKMel, wts::AbstractArray, nfilts::Int, binfreqs) = wts = broadcast(*, 2 ./ ((binfreqs[3:nfilts+2]) - binfreqs[1:nfilts]), wts)
 
-function fft2melmx(nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0.0, maxfreq=sr/2, htkmel=false, constamp=false)
+function fft2band(fbtype::MelFilterBank, nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0.0, maxfreq=sr/2)
     wts = zeros(nfilts, nfft)
     # Center freqs of each DFT bin
     fftfreqs = collect(0:nfft-1) / nfft * sr;
     # 'Center freqs' of mel bands - uniformly spaced between limits
-    minmel = hz2mel(minfreq, htkmel);
-    maxmel = hz2mel(maxfreq, htkmel);
-    binfreqs = mel2hz(minmel .+ collect(0:(nfilts+1)) / (nfilts + 1) * (maxmel - minmel), htkmel);
-##    binbin = iround(binfrqs/sr*(nfft-1));
+    minmel = hz2band(minfreq, fbtype)
+    maxmel = hz2band(maxfreq, fbtype)
+    binfreqs = band2hz(minmel .+ collect(0:(nfilts+1)) / (nfilts + 1) * (maxmel - minmel), fbtype);
+    ## binbin = iround(binfrqs/sr*(nfft-1));
 
     for i in 1:nfilts
         fs = binfreqs[i .+ (0:2)]
@@ -96,63 +86,54 @@ function fft2melmx(nfft::Int, nfilts::Int; sr=8000.0, width=1.0, minfreq=0.0, ma
         wts[i,:] = max.(0, min.(loslope, hislope))
     end
 
-    if !constamp
-        ## unclear what this does...
-        ## Slaney-style mel is scaled to be approx constant E per channel
-        wts = broadcast(*, 2 ./ ((binfreqs[3:nfilts+2]) - binfreqs[1:nfilts]), wts)
-    end
+    scale_channel!(fbtype, wts, nfilts, binfreqs)
+    
     # Make sure 2nd half of DFT is zero
     wts[:, (nfft>>1)+1:nfft] .= 0.
     return wts
 end
 
-function hz2mel(f::Vector{T}, htk=false) where {T<:AbstractFloat}
-    if htk
-        return 2595 .* log10.(1 .+ f / 700)
-    else
-        f0 = 0.0
-        fsp = 200/3
-        brkfrq = 1000.0
-        brkpt = (brkfrq - f0) / fsp
-        logstep = exp(log(6.4) / 27)
-        linpts = f .< brkfrq
-        z = zeros(size(f))      # prevent InexactError() by making these Float64
-        z[findall(linpts)] = f[findall(linpts)]/brkfrq ./ log(logstep)
-        z[findall(.!linpts)] = brkpt .+ log.(f[findall(.!linpts)] / brkfrq) ./ log(logstep)
-    end
-    return z
-end
-hz2mel(f::AbstractFloat, htk=false)  = hz2mel([f], htk)[1]
-
-function mel2hz(z::Vector{T}, htk=false) where {T<:AbstractFloat}
-    if htk
-        f = 700 .* (10 .^ (z ./ 2595) .- 1)
-    else
-        f0 = 0.0
-        fsp = 200/3
-        brkfrq = 1000.0
-        brkpt = (brkfrq - f0) / fsp
-        logstep = exp(log(6.4) / 27)
-        linpts = z .< brkpt
-        f = similar(z)
-        f[linpts] = f0 .+ fsp * z[linpts]
-        f[.!linpts] = brkfrq .* exp.(log.(logstep) * (z[.!linpts] .- brkpt))
-    end
-    return f
+hz2band(::T, ::F) where {F <: FilterBank, T <: AbstractFloat }= error("hz2band not implemented for filter bank $F")
+hz2band(f::T, ::Bark) where {T<:AbstractFloat} = 6asinh(f / 600)
+hz2band(f::T, ::HTKMelFilterBank) where {T<:AbstractFloat} = 2595 * log10(1 + f / 700)
+function hz2band(f::T, ::Mel) where {T<:AbstractFloat}
+    f0 = 0.0
+    fsp = 200/3
+    brkfrq = 1000.0
+    brkpt = (brkfrq - f0) / fsp
+    logstep = exp(log(6.4) / 27)
+    f < brkfrq ? f / brkfrq / log(logstep) : brkpt + log(f / brkfrq) / log(logstep)
 end
 
-function postaud(x::Matrix{T}, fmax::Real, fbtype=:bark, broaden=false) where {T<:AbstractFloat}
+function hz2band(v::Vector{T}, fbtype::F) where {F <: FilterBank, T<:AbstractFloat}
+    hz2band_scalar(x::T) = hz2band(x, fbtype)
+    hz2band_scalar.(v)
+end
+
+
+band2hz(::T, ::F) where {F <: FilterBank, T <: AbstractFloat  }= error("band2hz not implemented for filter bank $F")
+band2hz(b::T, ::Bark) where {T<:AbstractFloat} = 600 * sinh(b / 6)
+band2hz(b::T, ::HTKMelFilterBank) where {T<:AbstractFloat} = 700 * (10 ^ (b / 2595) - 1)
+function band2hz(b::T, ::Mel) where {T<:AbstractFloat}
+    f0 = 0.0
+    fsp = 200/3
+    brkfrq = 1000.0
+    brkpt = (brkfrq - f0) / fsp
+    logstep = exp(log(6.4) / 27)
+    b < brkpt ? f0 + fsp * b :  brkfrq * exp(log(logstep) * (b - brkpt))
+end
+
+function band2hz(v::Vector{T}, fbtype::F) where {F <: FilterBank, T<:AbstractFloat}
+    band2hz_scalar(x::T) = band2hz(x, fbtype)
+    band2hz_scalar.(v)
+end
+
+function postaud(x::Matrix{T}, fmax::Real, fbtype::FilterBank=Bark(), broaden=false) where {T<:AbstractFloat}
     (nbands,nframes) = size(x)
     nfpts = nbands + 2broaden
-    if fbtype == :bark
-        bandcfhz = bark2hz.(range(0, hz2bark(fmax), length=nfpts))
-    elseif fbtype == :mel
-        bandcfhz = mel2hz(range(0, hz2mel(fmax), length=nfpts))
-    elseif fbtype == :htkmel || fbtype == :fcmel
-        bandcfhz = mel2hz(range(0, hz2mel(fmax,1), length=nfpts),1);
-    else
-        error("Unknown filterbank type")
-    end
+
+    bandcfhz = band2hz(range(0, hz2band(fmax, fbtype), length=nfpts), fbtype)
+    
     # Remove extremal bands (the ones that will be duplicated)
     bandcfhz = bandcfhz[1+broaden:nfpts-broaden];
     # Hynek's magic equal-loudness-curve formula
@@ -233,7 +214,7 @@ function spec2cep(spec::Array{T}, ncep::Int=13, dcttype::Int=2) where {T<:Abstra
 end
 
 function lifter(x::Array{T}, lift::Real=0.6, invs=false) where {T<:AbstractFloat}
-    (ncep, nf) = size(x)
+    (ncep, nf) = size(x)    
     if lift == 0
         return x
     end

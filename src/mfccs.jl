@@ -14,7 +14,7 @@ using Memoize
 ## Defaults here are HTK parameters, this is contrary to melfcc
 function mfcc(x::Vector{T}, sr::Real=16000.0; wintime=0.025, steptime=0.01, numcep=13,
               lifterexp=-22, sumpower=false, preemph=0.97, dither=false, minfreq=0.0, maxfreq=sr/2,
-              nbands=20, bwidth=1.0, dcttype=3, fbtype=:htkmel,
+              nbands=20, bwidth=1.0, dcttype=3, fbtype::FilterBank=HTKMel(),
               usecmp=false, modelorder=0) where {T<:AbstractFloat}
     if (preemph != 0)
         x = filt(PolynomialRatio([1., -preemph], [1.]), x)
@@ -40,29 +40,27 @@ function mfcc(x::Vector{T}, sr::Real=16000.0; wintime=0.025, steptime=0.01, numc
     meta = Dict("sr" => sr, "wintime" => wintime, "steptime" => steptime, "numcep" => numcep,
             "lifterexp" => lifterexp, "sumpower" => sumpower, "preemph" => preemph,
             "dither" => dither, "minfreq" => minfreq, "maxfreq" => maxfreq, "nbands" => nbands,
-            "bwidth" => bwidth, "dcttype" => dcttype, "fbtype" => fbtype,
+            "bwidth" => bwidth, "dcttype" => dcttype, "fbtype" => fb_type(fbtype),
             "usecmp" => usecmp, "modelorder" => modelorder)
     return (cepstra, pspec', meta)
 end
 
 mfcc(x::Array{T}, sr::Real=16000.0; args...) where {T<:AbstractFloat} = @distributed (tuple) for i=1:size(x)[2] mfcc(x[:,i], sr; args...) end
 
+abstract type MFCCConfig end
+struct Rasta <: MFCCConfig end
+struct WBSpeaker <: MFCCConfig end
+struct NBSpeaker <: MFCCConfig end
+struct SpkidToolKit <: MFCCConfig end
+struct HTK <: MFCCConfig end
 
-## default feature configurations, :rasta, :htk, :spkid_toolkit, :wbspeaker
-## With optional extra agrs... you can specify more options
-function mfcc(x::Vector{T}, sr::AbstractFloat, defaults::Symbol; args...) where {T<:AbstractFloat}
-    if defaults == :rasta
-        mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=40, dcttype=2, fbtype=:mel, args...)
-    elseif defaults ∈ [:spkid_toolkit, :nbspeaker]
-        mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=30, dcttype=2, fbtype=:mel, minfreq=130., maxfreq=3900., numcep=20, args...)
-    elseif defaults == :wbspeaker
-        mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=63, dcttype=2, fbtype=:mel, minfreq=62.5, maxfreq=7937.5, numcep=20, args...)
-    elseif defaults == :htk
-        mfcc(x, sr; args...)
-    else
-        error("Unknown set of defaults ", defaults)
-    end
-end
+mfcc(x::Vector{T}, sr::AbstractFloat, defaults::C; args...) where {T<:AbstractFloat, C<:MFCCConfig} = error("Unknown set of defaults ", defaults)
+mfcc(x::Vector{T}, sr::AbstractFloat, ::Rasta; args...) where {T<:AbstractFloat}            = mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=40, dcttype=2, fbtype=Mel(), args...)
+mfcc(x::Vector{T}, sr::AbstractFloat, ::WBSpeaker; args...) where {T<:AbstractFloat}        = mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=63, dcttype=2, fbtype=Mel(), minfreq=62.5, maxfreq=7937.5, numcep=20, args...)
+mfcc(x::Vector{T}, sr::AbstractFloat, ::NBSpeaker; args...) where {T<:AbstractFloat}        = mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=30, dcttype=2, fbtype=Mel(), minfreq=130., maxfreq=3900., numcep=20, args...)
+mfcc(x::Vector{T}, sr::AbstractFloat, ::SpkidToolKit; args...) where {T<:AbstractFloat}     = mfcc(x, sr; lifterexp=0.6, sumpower=true, nbands=30, dcttype=2, fbtype=Mel(), minfreq=130., maxfreq=3900., numcep=20, args...)
+mfcc(x::Vector{T}, sr::AbstractFloat, ::HTK; args...) where {T<:AbstractFloat}              = mfcc(x, sr; args...)
+
 
 ## our features run down with time, this is essential for the use of DSP.filt()
 function deltas(x::Matrix{T}, w::Int=9) where {T<:AbstractFloat}
@@ -82,7 +80,6 @@ end
 
 
 import Base.Sort.sortperm
-sortperm(a::Array, dim::Int) = mapslices(sortperm, a, dims=dim)
 
 @memoize erfinvtab(wl::Int) = √2 * erfinv.(2collect(1:wl) / (wl + 1) .- 1)
 
@@ -92,7 +89,7 @@ function warpstats(x::Matrix{T}, w::Int=399) where {T<:Real}
     hw = (wl+1) / 2
     rank = similar(x, Int)
     if nx < w
-        index = sortperm(x, 1)
+        index = mapslices(sortperm, x, dims=1)
         for j in 1:nfea
             rank[index[:,j], j] = collect(1:nx)
         end
@@ -117,11 +114,15 @@ function warpstats(x::Matrix{T}, w::Int=399) where {T<:Real}
     return rank, erfinvtab(wl)
 end
 
-function warp(x::Matrix{T}, w::Int=399) where {T<:Real}
+function warpstats(x::Vector{T}, w::Int=399) where {T<:Real}
+    warpstats(reshape(x, length(x), 1), w)
+end
+
+function warp(x::AbstractArray{T}, w::Int=399) where {T<:Real}
     rank, erfinvtab = warpstats(x, w)
     return erfinvtab[rank]
 end
-warp(x::Vector{T}, w::Int=399) where {T<:Real} = warp(x'', w)
+
 
 function WarpedArray(x::Matrix, w::Int)
     rank, erfinvtab = warpstats(x, w)
